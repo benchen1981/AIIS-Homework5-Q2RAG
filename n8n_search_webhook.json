@@ -1,0 +1,207 @@
+{
+  "name": "RAG Search Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "=/webhook/search_rag",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const query = $json[\"body\"][\"query\"] || $json[\"query\"] || '';\nconst top_k = $json[\"body\"][\"top_k\"] || 4;\nreturn [{json:{query, top_k}}];"
+      },
+      "name": "Extract Query",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "embed",
+        "model": "text-embedding-3-small",
+        "input": "={{$json[\"query\"]}}"
+      },
+      "name": "Embed Query",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ],
+      "credentials": {
+        "openAIApi": {
+          "id": "<<REPLACE_ME_OPENAI_CREDENTIAL_ID>>"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "query",
+        "indexName": "<<REPLACE_ME_PINECONE_INDEX>>",
+        "vector": "={{$json[\"embedding\"]}}",
+        "topK": "={{$json[\"top_k\"]}}"
+      },
+      "name": "Pinecone Query",
+      "type": "n8n-nodes-base.pinecone",
+      "typeVersion": 1,
+      "position": [
+        850,
+        300
+      ],
+      "credentials": {
+        "pineconeApi": {
+          "id": "<<REPLACE_ME_PINECONE_CREDENTIAL_ID>>"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const items = $json[\"matches\"] || $json[\"results\"] || $json[\"response\"]?.matches || [];\nconst sources = items.map((m,i)=>({document_id: m.metadata?.document_id || m.id, chunk_index: m.metadata?.chunk_index, text: m.metadata?.text, score: m.score || m.metadata?.score}));\nreturn [{json:{sources}}];"
+      },
+      "name": "Collect Sources",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const system = `You are a helpful assistant. Use the provided context snippets to answer the user's question. Cite sources by document_id and chunk_index.`;\nconst userQ = $node[\"Extract Query\"].json[0].query;\nconst sources = $node[\"Collect Sources\"].json[0].sources;\nlet context = '';\nfor(const s of sources){ context += `\\nSource: document_id=${s.document_id} chunk_index=${s.chunk_index}\\n${s.text}\\n----\\n`; }\nconst prompt = [{role:'system', content: system},{role:'user', content: `Context:\\n${context}\\n\\nQuestion: ${userQ}\\nAnswer concisely and include citations.` }];\nreturn [{json:{messages: prompt}}];"
+      },
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "operation": "chatCompletion",
+        "messages": "={{$json[\"messages\"]}}",
+        "additionalFields": {}
+      },
+      "name": "LLM Answer",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        300
+      ],
+      "credentials": {
+        "openAIApi": {
+          "id": "<<REPLACE_ME_OPENAI_CREDENTIAL_ID>>"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const answer = $json[\"choices\"]?.[0]?.message?.content || $json[\"response\"] || '';\nconst sources = $node[\"Collect Sources\"].json[0].sources || [];\nreturn [{json:{answer, sources}}];"
+      },
+      "name": "Return Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Query": {
+      "main": [
+        [
+          {
+            "node": "Embed Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Query": {
+      "main": [
+        [
+          {
+            "node": "Pinecone Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone Query": {
+      "main": [
+        [
+          {
+            "node": "Collect Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Sources": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "LLM Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Answer": {
+      "main": [
+        [
+          {
+            "node": "Return Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "id": "search-rag-webhook"
+}

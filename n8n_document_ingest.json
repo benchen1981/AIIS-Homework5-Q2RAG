@@ -1,0 +1,388 @@
+{
+  "name": "Document Ingest - FastAPI Backend Integration",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "=/webhook/document_upload",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const fileUrl = $json[\"body\"][\"file_url\"];\nreturn [{json:{fileUrl}}];"
+      },
+      "name": "Extract File URL",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "={{$json[\"fileUrl\"]}}",
+        "binaryPropertyName": "data"
+      },
+      "name": "Download File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Determine mime / extension and convert if docx\nconst buffer = items[0].binary.data.data; // binary\nconst filename = $json[\"body\"][\"filename\"] || 'upload.pdf';\nreturn [{json:{filename}, binary:{file:{data:buffer, fileName:filename}}}];"
+      },
+      "name": "Normalize File",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "runConversion",
+        "filePath": "={{$binary[\"file\"].fileName}}",
+        "outputFormat": "text"
+      },
+      "name": "Convert to Text (example node)",
+      "type": "n8n-nodes-base.exec",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const text = $json[\"output_text\"] || $json[\"data\"] || '';\nreturn [{json:{text}}];"
+      },
+      "name": "Ensure Text Field",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "operation": "chatCompletion",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a JSON extractor. Output strictly one JSON object per document according to schema."
+          },
+          {
+            "role": "user",
+            "content": "Extract fields: title, date, parties, contract_amounts, effective_date, summary, sections. Document: {{$json[\"text\"]}}"
+          }
+        ],
+        "additionalFields": {}
+      },
+      "name": "LLM JSON Extractor",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        300
+      ],
+      "credentials": {
+        "openAIApi": {
+          "id": "<<REPLACE_ME_OPENAI_CREDENTIAL_ID>>"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const content = $json[\"choices\"]?.[0]?.text || $json[\"response\"] || $json[\"message\"]?.content || '';\nlet parsed = null;\ntry{ parsed = JSON.parse(content);}catch(e){\n  return [{json:{status:'error',error:e.toString(),raw:content}}];\n}\nreturn [{json:{status:'ok',metadata:parsed,full_text:$json[\"text\"]}}];"
+      },
+      "name": "Parse LLM Output",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "documents",
+        "schema": "public",
+        "columns": [
+          {
+            "name": "filename",
+            "value": "={{$json[\"filename\"]}}"
+          },
+          {
+            "name": "text",
+            "value": "={{$json[\"full_text\"]}}"
+          },
+          {
+            "name": "metadata",
+            "value": "={{$json[\"metadata\"]}}"
+          },
+          {
+            "name": "status",
+            "value": "processed"
+          }
+        ]
+      },
+      "name": "Postgres Insert Document",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "<<REPLACE_ME_POSTGRES_CREDENTIAL_ID>>"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const text = $json[\"full_text\"] || '';\nconst chunkSize = 1000;\nconst overlap = 200;\nlet chunks = [];\nfor(let i=0;i<text.length;i+=chunkSize-overlap){\n  const chunk = text.slice(i,i+chunkSize);\n  chunks.push({chunk_index:chunks.length, chunk_text:chunk});\n}\nreturn chunks.map(c=>({json:c}));"
+      },
+      "name": "Chunk Text",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "embed",
+        "model": "text-embedding-3-small",
+        "input": "={{$json[\"chunk_text\"]}}"
+      },
+      "name": "Create Embedding",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        300
+      ],
+      "credentials": {
+        "openAIApi": {
+          "id": "<<REPLACE_ME_OPENAI_CREDENTIAL_ID>>"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "indexName": "<<REPLACE_ME_PINECONE_INDEX>>",
+        "items": "={{[{id:$node[\"Postgres Insert Document\"].json[0].id+\"_\"+$json[\"chunk_index\"], values: $json[\"embedding\"], metadata:{document_id: $node[\"Postgres Insert Document\"].json[0].id, chunk_index:$json[\"chunk_index\"], text:$json[\"chunk_text\"]}}]}}"
+      },
+      "name": "Pinecone Upsert",
+      "type": "n8n-nodes-base.pinecone",
+      "typeVersion": 1,
+      "position": [
+        2450,
+        300
+      ],
+      "credentials": {
+        "pineconeApi": {
+          "id": "<<REPLACE_ME_PINECONE_CREDENTIAL_ID>>"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "chunks",
+        "schema": "public",
+        "columns": [
+          {
+            "name": "document_id",
+            "value": "={{$node[\"Postgres Insert Document\"].json[0].id}}"
+          },
+          {
+            "name": "chunk_index",
+            "value": "={{$json[\"chunk_index\"]}}"
+          },
+          {
+            "name": "chunk_text",
+            "value": "={{$json[\"chunk_text\"]}}"
+          },
+          {
+            "name": "metadata",
+            "value": "={{JSON.stringify({source:'ingest'})}}"
+          }
+        ]
+      },
+      "name": "Postgres Insert Chunk",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "<<REPLACE_ME_POSTGRES_CREDENTIAL_ID>>"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract File URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract File URL": {
+      "main": [
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Normalize File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize File": {
+      "main": [
+        [
+          {
+            "node": "Convert to Text (example node)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to Text (example node)": {
+      "main": [
+        [
+          {
+            "node": "Ensure Text Field",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Text Field": {
+      "main": [
+        [
+          {
+            "node": "LLM JSON Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM JSON Extractor": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Output": {
+      "main": [
+        [
+          {
+            "node": "Postgres Insert Document",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Chunk Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Insert Document": {
+      "main": [
+        [
+          {
+            "node": "Pinecone Upsert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Postgres Insert Chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunk Text": {
+      "main": [
+        [
+          {
+            "node": "Create Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Embedding": {
+      "main": [
+        [
+          {
+            "node": "Pinecone Upsert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Postgres Insert Chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "id": "doc-ingest-smallklin"
+}

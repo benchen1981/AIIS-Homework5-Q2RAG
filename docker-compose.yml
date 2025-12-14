@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14-alpine
+    container_name: docdb_postgres
+    environment:
+      POSTGRES_DB: docdb
+      POSTGRES_USER: docuser
+      POSTGRES_PASSWORD: docpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U docuser -d docdb" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docdb_network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: docdb_backend
+    environment:
+      DATABASE_URL: postgresql://docuser:docpassword@postgres:5432/docdb
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GROK_API_KEY: ${GROK_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL}
+      VECTOR_DB_TYPE: chromadb
+      CHROMADB_PATH: /app/chromadb_data
+      UPLOAD_DIR: /app/uploads
+      MAX_FILE_SIZE_MB: 50
+      CHUNK_SIZE: 1000
+      CHUNK_OVERLAP: 200
+      DEFAULT_TOP_K: 4
+      LLM_MODEL: gpt-4o-mini
+      EMBEDDING_MODEL: text-embedding-3-small
+      SECRET_KEY: ${SECRET_KEY:-docker-secret-key-change-in-production}
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./chromadb_data:/app/chromadb_data
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - docdb_network
+    restart: unless-stopped
+
+  # Frontend UI
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: docdb_frontend
+    environment:
+      API_BASE_URL: http://backend:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    networks:
+      - docdb_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+
+networks:
+  docdb_network:
+    driver: bridge

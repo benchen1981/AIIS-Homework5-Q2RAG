@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Application
+uploads/
+logs/
+chromadb_data/
+*.log
+
+# Environment
+.env
+.env.local
+
+# Demo backup
+demo_mode_backup/
+
+# OpenSpec
+openspec/
+.agent/
+
+# Database
+*.db
+*.sqlite
+
+# Temporary
+*.tmp
+*.temp
