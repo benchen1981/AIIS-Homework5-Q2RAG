@@ -1,0 +1,9 @@
+streamlit
+chromadb
+pypdf
+python-docx
+tiktoken
+requests
+pandas
+tenacity
+pysqlite3-binary
