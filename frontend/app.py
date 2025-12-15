@@ -62,12 +62,12 @@ st.markdown("""
 def get_api_info():
     """Get API and model information"""
     try:
-        response = requests.get(f"{API_BASE_URL}/api/health", timeout=2)
+        response = requests.get(f"{API_BASE_URL}/api/health", timeout=5)
         if response.status_code == 200:
             data = response.json()
             # Try to get more info from config endpoint if available
             try:
-                config_response = requests.get(f"{API_BASE_URL}/api/config", timeout=1)
+                config_response = requests.get(f"{API_BASE_URL}/api/admin/config", timeout=2)
                 if config_response.status_code == 200:
                     config = config_response.json()
                     return {
@@ -89,7 +89,7 @@ def get_api_info():
         pass
     
     try:
-        response = requests.get(f"{API_INTERNAL_URL}/api/health", timeout=2)
+        response = requests.get(f"{API_INTERNAL_URL}/api/health", timeout=5)
         if response.status_code == 200:
             return {"status": "healthy", "provider": "未知", "model": "未知"}
     except:
